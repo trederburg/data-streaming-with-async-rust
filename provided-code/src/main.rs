@@ -15,12 +15,76 @@ struct Opts {
     #[clap(short, long)]
     from: String,
 }
+struct MaxPrice;
+struct MinPrice;
+struct WindowedSMA {
+    window_size: usize,
+}
+struct PriceDifference;
+
+impl AsyncStockSignal for MaxPrice {
+    type SignalType = f64;
+
+    fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
+        if series.is_empty() {
+            None
+        } else {
+            Some(series.iter().fold(f64::MIN, |acc, q| acc.max(*q)))
+        }
+    }
+}
+
+impl AsyncStockSignal for MinPrice {
+    type SignalType = f64;
+
+    fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
+        if series.is_empty() {
+            None
+        } else {
+            Some(series.iter().fold(f64::MAX, |acc, q| acc.min(*q)))
+        }
+    }
+}
+
+impl AsyncStockSignal for WindowedSMA {
+    type SignalType = Vec<f64>;
+    fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
+        if !series.is_empty() && self.window_size > 1 {
+            Some(
+                series
+                    .windows(self.window_size)
+                    .map(|w| w.iter().sum::<f64>() / w.len() as f64)
+                    .collect(),
+            )
+        } else {
+            None
+        }
+    }
+}
+
+impl AsyncStockSignal for PriceDifference {
+    type SignalType = (f64, f64);
+
+    fn calculate(&self, series: &[f64]) -> Option<Self::SignalType> {
+        if !series.is_empty() {
+            // unwrap is safe here even if first == last
+            let (first, last) = (series.first().unwrap(), series.last().unwrap());
+            let abs_diff = last - first;
+            let first = if *first == 0.0 { 1.0 } else { *first };
+            let rel_diff = abs_diff / first;
+            Some((abs_diff, rel_diff))
+        } else {
+            None
+        }
+    }
+
+    
+}
 
 ///
 /// A trait to provide a common interface for all signal calculations.
 ///
 trait AsyncStockSignal {
-
     ///
     /// The signal's data type.
     ///
@@ -36,119 +100,123 @@ trait AsyncStockSignal {
     fn calculate(&self, series: &[f64]) -> Option<Self::SignalType>;
 }
 
-///
-/// Calculates the absolute and relative difference between the beginning and ending of an f64 series. The relative difference is relative to the beginning.
-///
-/// # Returns
-///
-/// A tuple `(absolute, relative)` difference.
-///
-fn price_diff(a: &[f64]) -> Option<(f64, f64)> {
-    if !a.is_empty() {
-        // unwrap is safe here even if first == last
-        let (first, last) = (a.first().unwrap(), a.last().unwrap());
-        let abs_diff = last - first;
-        let first = if *first == 0.0 { 1.0 } else { *first };
-        let rel_diff = abs_diff / first;
-        Some((abs_diff, rel_diff))
-    } else {
-        None
-    }
-}
+// ///
+// /// Calculates the absolute and relative difference between the beginning and ending of an f64 series. The relative difference is relative to the beginning.
+// ///
+// /// # Returns
+// ///
+// /// A tuple `(absolute, relative)` difference.
+// ///
+// fn price_diff(a: &[f64]) -> Option<(f64, f64)> {
+//     if !a.is_empty() {
+//         // unwrap is safe here even if first == last
+//         let (first, last) = (a.first().unwrap(), a.last().unwrap());
+//         let abs_diff = last - first;
+//         let first = if *first == 0.0 { 1.0 } else { *first };
+//         let rel_diff = abs_diff / first;
+//         Some((abs_diff, rel_diff))
+//     } else {
+//         None
+//     }
+// }
 
-///
-/// Window function to create a simple moving average
-///
-fn n_window_sma(n: usize, series: &[f64]) -> Option<Vec<f64>> {
-    if !series.is_empty() && n > 1 {
-        Some(
-            series
-                .windows(n)
-                .map(|w| w.iter().sum::<f64>() / w.len() as f64)
-                .collect(),
-        )
-    } else {
-        None
-    }
-}
+// ///
+// /// Window function to create a simple moving average
+// ///
+// fn n_window_sma(n: usize, series: &[f64]) -> Option<Vec<f64>> {
+//     if !series.is_empty() && n > 1 {
+//         Some(
+//             series
+//                 .windows(n)
+//                 .map(|w| w.iter().sum::<f64>() / w.len() as f64)
+//                 .collect(),
+//         )
+//     } else {
+//         None
+//     }
+// }
 
-///
-/// Find the maximum in a series of f64
-///
-fn max(series: &[f64]) -> Option<f64> {
-    if series.is_empty() {
-        None
-    } else {
-        Some(series.iter().fold(f64::MIN, |acc, q| acc.max(*q)))
-    }
-}
+// ///
+// /// Find the maximum in a series of f64
+// ///
+// fn max(series: &[f64]) -> Option<f64> {
+//     if series.is_empty() {
+//         None
+//     } else {
+//         Some(series.iter().fold(f64::MIN, |acc, q| acc.max(*q)))
+//     }
+// }
 
-///
-/// Find the minimum in a series of f64
-///
-fn min(series: &[f64]) -> Option<f64> {
-    if series.is_empty() {
-        None
-    } else {
-        Some(series.iter().fold(f64::MAX, |acc, q| acc.min(*q)))
-    }
-}
+// ///
+// /// Find the minimum in a series of f64
+// ///
+// fn min(series: &[f64]) -> Option<f64> {
+//     if series.is_empty() {
+//         None
+//     } else {
+//         Some(series.iter().fold(f64::MAX, |acc, q| acc.min(*q)))
+//     }
+// }
 
-///
-/// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
-///
-fn fetch_closing_data(
-    symbol: &str,
-    beginning: &DateTime<Utc>,
-    end: &DateTime<Utc>,
-) -> std::io::Result<Vec<f64>> {
-    let provider = yahoo::YahooConnector::new();
+// ///
+// /// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
+// ///
+// fn fetch_closing_data(
+//     symbol: &str,
+//     beginning: &DateTime<Utc>,
+//     end: &DateTime<Utc>,
+// ) -> std::io::Result<Vec<f64>> {
+//     let provider = yahoo::YahooConnector::new();
 
-    let response = provider
-        .get_quote_history(symbol, *beginning, *end)
-        .map_err(|_| Error::from(ErrorKind::InvalidData))?;
-    let mut quotes = response
-        .quotes()
-        .map_err(|_| Error::from(ErrorKind::InvalidData))?;
-    if !quotes.is_empty() {
-        quotes.sort_by_cached_key(|k| k.timestamp);
-        Ok(quotes.iter().map(|q| q.adjclose as f64).collect())
-    } else {
-        Ok(vec![])
-    }
-}
+//     let response = provider
+//         .get_quote_history(symbol, *beginning, *end)
+//         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+//     let mut quotes = response
+//         .quotes()
+//         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
+//     if !quotes.is_empty() {
+//         quotes.sort_by_cached_key(|k| k.timestamp);
+//         Ok(quotes.iter().map(|q| q.adjclose as f64).collect())
+//     } else {
+//         Ok(vec![])
+//     }
+// }
 
-fn main() -> std::io::Result<()> {
-    let opts = Opts::parse();
-    let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
-    let to = Utc::now();
+// fn main() -> std::io::Result<()> {
+//     let opts = Opts::parse();
+//     let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
+//     let to = Utc::now();
 
-    // a simple way to output a CSV header
-    println!("period start,symbol,price,change %,min,max,30d avg");
-    for symbol in opts.symbols.split(',') {
-        let closes = fetch_closing_data(&symbol, &from, &to)?;
-        if !closes.is_empty() {
-                // min/max of the period. unwrap() because those are Option types
-                let period_max: f64 = max(&closes).unwrap();
-                let period_min: f64 = min(&closes).unwrap();
-                let last_price = *closes.last().unwrap_or(&0.0);
-                let (_, pct_change) = price_diff(&closes).unwrap_or((0.0, 0.0));
-                let sma = n_window_sma(30, &closes).unwrap_or_default();
+//     // a simple way to output a CSV header
+//     println!("period start,symbol,price,change %,min,max,30d avg");
+//     for symbol in opts.symbols.split(',') {
+//         let closes = fetch_closing_data(&symbol, &from, &to)?;
+//         if !closes.is_empty() {
+//             // min/max of the period. unwrap() because those are Option types
+//             let period_max: f64 = max(&closes).unwrap();
+//             let period_min: f64 = min(&closes).unwrap();
+//             let last_price = *closes.last().unwrap_or(&0.0);
+//             let (_, pct_change) = price_diff(&closes).unwrap_or((0.0, 0.0));
+//             let sma = n_window_sma(30, &closes).unwrap_or_default();
 
-            // a simple way to output CSV data
-            println!(
-                "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-                from.to_rfc3339(),
-                symbol,
-                last_price,
-                pct_change * 100.0,
-                period_min,
-                period_max,
-                sma.last().unwrap_or(&0.0)
-            );
-        }
-    }
-    Ok(())
+//             // a simple way to output CSV data
+//             println!(
+//                 "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
+//                 from.to_rfc3339(),
+//                 symbol,
+//                 last_price,
+//                 pct_change * 100.0,
+//                 period_min,
+//                 period_max,
+//                 sma.last().unwrap_or(&0.0)
+//             );
+//         }
+//     }
+//     Ok(())
+// }
+
+fn main(){
+println!("hello prices")
 }
 
 #[cfg(test)]
