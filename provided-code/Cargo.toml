@@ -9,4 +9,5 @@ version = "0.1.0"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 clap = {version = "3.1.8", features = ["derive"]}
-yahoo_finance_api = { version = "1.1", features = ["blocking"] }
+tokio = { version =  "1.34.0",  features = ["full"] }
+yahoo_finance_api = { version = "2.1.0" }
