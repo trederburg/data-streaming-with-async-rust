@@ -97,7 +97,6 @@ pub trait AsyncStockSignal {
     fn calculate(&self, series: &[f64]) -> Option<Self::SignalType>;
 }
 
-
 #[cfg(test)]
 mod tests {
     #![allow(non_snake_case)]
