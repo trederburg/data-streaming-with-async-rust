@@ -100,7 +100,10 @@ async fn main() -> std::io::Result<()> {
 
     while let Some((symbol, closes)) = rx.recv().await {
         if !closes.is_empty() {
-            println!("{}", convert_closes_to_string(from, symbol.as_str(), closes))
+            println!(
+                "{}",
+                convert_closes_to_string(from, symbol.as_str(), closes)
+            );
         }
     }
     Ok(())
