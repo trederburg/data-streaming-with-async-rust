@@ -52,6 +52,29 @@ fn convert_datetime_to_offset(datetime: &DateTime<Utc>) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(datetime.timestamp()).expect("Couldn't convert")
 }
 
+fn convert_closes_to_string(from: DateTime<Utc>, symbol: &str, closes: Vec<f64>) -> String {
+    // min/max of the period. unwrap() because those are Option types
+    let period_max = MaxPrice.calculate(&closes).unwrap();
+    let period_min = MinPrice.calculate(&closes).unwrap();
+    let last_price = *closes.last().unwrap_or(&0.0);
+    let (_, pct_change) = PriceDifference.calculate(&closes).unwrap_or((0.0, 0.0));
+    let sma = WindowedSMA { window_size: 30 }
+        .calculate(&closes)
+        .unwrap_or_default();
+
+    // a simple way to output CSV data
+    format!(
+        "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
+        from.to_rfc3339(),
+        symbol,
+        last_price,
+        pct_change * 100.0,
+        period_min,
+        period_max,
+        sma.last().unwrap_or(&0.0)
+    )
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let opts = Opts::parse();
@@ -74,33 +97,11 @@ async fn main() -> std::io::Result<()> {
         });
     }
     drop(tx);
-    
+
     while let Some((symbol, closes)) = rx.recv().await {
         if !closes.is_empty() {
-            // min/max of the period. unwrap() because those are Option types
-            let period_max = MaxPrice.calculate(&closes).unwrap();
-            let period_min = MinPrice.calculate(&closes).unwrap();
-            let last_price = *closes.last().unwrap_or(&0.0);
-            let (_, pct_change) = PriceDifference.calculate(&closes).unwrap_or((0.0, 0.0));
-            let sma = WindowedSMA { window_size: 30 }
-                .calculate(&closes)
-                .unwrap_or_default();
-
-            // a simple way to output CSV data
-            println!(
-                "{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-                from.to_rfc3339(),
-                symbol,
-                last_price,
-                pct_change * 100.0,
-                period_min,
-                period_max,
-                sma.last().unwrap_or(&0.0)
-            );
+            println!("{}", convert_closes_to_string(from, symbol.as_str(), closes))
         }
     }
-
-    //tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
     Ok(())
 }
