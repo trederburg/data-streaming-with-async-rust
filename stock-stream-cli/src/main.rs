@@ -23,7 +23,8 @@ struct Opts {
     #[clap(short, long)]
     from: String,
 }
-
+const BUFFER_SIZE: usize = 100;
+const REFRESH_INTERVAL: u64 = 30;
 ///
 /// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
 ///
@@ -56,6 +57,27 @@ fn convert_datetime_to_offset(datetime: &DateTime<Utc>) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(datetime.timestamp()).expect("Couldn't convert")
 }
 
+async fn generate_yahoo_requests(
+    tx: mpsc::Sender<(String, Vec<f64>, DateTime<Utc>)>,
+    from: &DateTime<Utc>,
+    symbol: &str,
+) -> () {
+    let from = from.clone();
+    let symbol = symbol.to_string();
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(REFRESH_INTERVAL));
+        loop {
+            let symbol = symbol.to_string();
+            let to = Utc::now();
+            let closes = fetch_closing_data(&symbol, &from, &to)
+                .await
+                .unwrap_or_else(|_| vec![]);
+            let _ = tx.send((symbol, closes, to)).await;
+            interval.tick().await;
+        }
+    });
+}
+
 fn convert_closes_to_string(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
@@ -86,32 +108,16 @@ fn convert_closes_to_string(
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> () {
     let opts = Opts::parse();
     let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
 
     // a simple way to output a CSV header
     println!("period start,period end,symbol,price,change %,min,max,30d avg");
-    let (tx, mut rx) = mpsc::channel(100);
+    let (tx, mut rx) = mpsc::channel(BUFFER_SIZE);
     for symbol in opts.symbols.split(',') {
-        let tx = tx.clone();
-        let from = from.clone();
-        let symbol = symbol.to_string();
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(30));
-            loop {
-                let symbol = symbol.to_string();
-                let to = Utc::now();
-                let closes = fetch_closing_data(&symbol, &from, &to)
-                    .await
-                    .unwrap_or_else(|_| vec![]);
-                let _ = tx.send((symbol, closes, to)).await;
-                interval.tick().await;
-            }
-        });
+        generate_yahoo_requests(tx.clone(), &from, symbol).await;
     }
-    drop(tx);
-
     while let Some((symbol, closes, to)) = rx.recv().await {
         if !closes.is_empty() {
             println!(
@@ -120,5 +126,4 @@ async fn main() -> std::io::Result<()> {
             );
         }
     }
-    Ok(())
 }
