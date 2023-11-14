@@ -10,7 +10,7 @@ pub struct MinPrice;
 /// Window function to create a simple moving average
 ///
 pub struct WindowedSMA {
-    pub window_size: usize,
+    window_size: usize,
 }
 ///
 /// Calculates the absolute and relative difference between the beginning and ending of an f64 series. The relative difference is relative to the beginning.
@@ -58,6 +58,12 @@ impl AsyncStockSignal for WindowedSMA {
         } else {
             None
         }
+    }
+}
+
+impl WindowedSMA {
+    pub fn new( window_size: usize) -> Self {
+        Self { window_size }
     }
 }
 
@@ -154,7 +160,7 @@ mod tests {
     fn test_WindowedSMA_calculate() {
         let series = vec![2.0, 4.5, 5.3, 6.5, 4.7];
 
-        let signal = WindowedSMA { window_size: 3 };
+        let signal = WindowedSMA::new(3);
         assert_eq!(
             signal.calculate(&series),
             Some(vec![3.9333333333333336, 5.433333333333334, 5.5])

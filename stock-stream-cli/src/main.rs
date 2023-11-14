@@ -25,6 +25,7 @@ struct Opts {
 }
 const BUFFER_SIZE: usize = 100;
 const REFRESH_INTERVAL: u64 = 30;
+const WINDOW_SIZE: usize = 30;
 ///
 /// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
 ///
@@ -89,7 +90,7 @@ fn convert_closes_to_string(
     let period_min = MinPrice.calculate(&closes).unwrap();
     let last_price = *closes.last().unwrap_or(&0.0);
     let (_, pct_change) = PriceDifference.calculate(&closes).unwrap_or((0.0, 0.0));
-    let sma = WindowedSMA { window_size: 30 }
+    let sma = WindowedSMA::new(WINDOW_SIZE)
         .calculate(&closes)
         .unwrap_or_default();
 
