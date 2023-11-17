@@ -1,10 +1,12 @@
 use chrono::prelude::*;
+use actix::prelude::*;
+use async_trait::async_trait;
 use clap::Parser;
-use std::io::{Error, ErrorKind};
+use std::{io::{Error, ErrorKind}, time};
 use tokio::{
     self,
     sync::mpsc,
-    time::{interval, Duration},
+    time::{interval, Duration}, runtime::Handle,
 };
 use yahoo::time::OffsetDateTime;
 use yahoo_finance_api as yahoo;
@@ -23,6 +25,64 @@ struct Opts {
     #[clap(short, long)]
     from: String,
 }
+struct DataFetcher{
+    data_processor: Addr<DataProcessor>
+}
+
+impl Actor for DataFetcher {
+    type Context = Context<Self>;
+}
+
+struct FetchData {
+    symbol: String,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+}
+
+impl Message for FetchData {
+    type Result =  Result<(), Box<dyn std::error::Error + 'static + Send>>;
+}
+
+#[async_trait]
+impl Handler<FetchData> for DataFetcher {
+    type Result = Result<(), Box<dyn std::error::Error + 'static + Send>>;
+
+    async fn handle(&mut self, ms
+    g: FetchData, _ctx: &mut Context<Self>) -> Self::Result {
+        let symbol = msg.symbol.clone();
+        let from = msg.from.clone();
+        let to = msg.to.clone();
+        tokio::spawn(async move {
+            let closes = fetch_closing_data(&symbol,from, to.clone()).await.unwrap_or_else(|_| vec![]);
+            let _ = self.data_processor.send(Convert { symbol, closes,to, from }).await;
+        });
+        Ok(())
+    }
+}
+
+struct  DataProcessor;
+
+impl Actor for DataProcessor {
+    type Context = Context<Self>;
+}
+struct Convert {
+    symbol: String,
+    closes: Vec<f64>,
+    to: OffsetDateTime,
+    from: OffsetDateTime,
+}
+
+impl Message for Convert {
+    type Result = String;
+}
+
+impl Handler<Convert> for DataProcessor {
+    type Result = String;
+
+    fn handle(&mut self, msg: Convert, _ctx: &mut Context<Self>) -> Self::Result {
+        convert_closes_to_string(msg.from, msg.to, msg.symbol.as_str(), msg.closes)
+    }
+}
 const BUFFER_SIZE: usize = 100;
 const REFRESH_INTERVAL: u64 = 30;
 const WINDOW_SIZE: usize = 30;
@@ -31,15 +91,15 @@ const WINDOW_SIZE: usize = 30;
 ///
 async fn fetch_closing_data(
     symbol: &str,
-    beginning: &DateTime<Utc>,
-    end: &DateTime<Utc>,
+    beginning: OffsetDateTime,
+    end: OffsetDateTime,
 ) -> std::io::Result<Vec<f64>> {
     let provider = yahoo::YahooConnector::new();
     let response = provider
         .get_quote_history(
             symbol,
-            convert_datetime_to_offset(beginning),
-            convert_datetime_to_offset(end),
+            beginning,
+            end,
         )
         .await
         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
@@ -54,34 +114,31 @@ async fn fetch_closing_data(
     }
 }
 
-fn convert_datetime_to_offset(datetime: &DateTime<Utc>) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp(datetime.timestamp()).expect("Couldn't convert")
-}
 
-async fn generate_yahoo_requests(
-    tx: mpsc::Sender<(String, Vec<f64>, DateTime<Utc>)>,
-    from: &DateTime<Utc>,
-    symbol: &str,
-) -> () {
-    let from = from.clone();
-    let symbol = symbol.to_string();
-    tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(REFRESH_INTERVAL));
-        loop {
-            let symbol = symbol.to_string();
-            let to = Utc::now();
-            let closes = fetch_closing_data(&symbol, &from, &to)
-                .await
-                .unwrap_or_else(|_| vec![]);
-            let _ = tx.send((symbol, closes, to)).await;
-            interval.tick().await;
-        }
-    });
-}
+
+// async fn generate_yahoo_requests(
+//     from: &DateTime<Utc>,
+//     symbol: &str,
+// ) -> Vec<f64> {
+//     let from = from.clone();
+//     let symbol = symbol.to_string();
+//     tokio::spawn(async move {
+//         // let mut interval = interval(Duration::from_secs(REFRESH_INTERVAL));
+//         // loop {
+//             let symbol = symbol.to_string();
+//             let to = Utc::now();
+//             let closes = fetch_closing_data(&symbol, &from, &to)
+//                 .await
+//                 .unwrap_or_else(|_| vec![]);
+//             (symbol, closes, to)
+//             // interval.tick().await;
+//         // }
+//     });
+// }
 
 fn convert_closes_to_string(
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
     symbol: &str,
     closes: Vec<f64>,
 ) -> String {
@@ -97,8 +154,8 @@ fn convert_closes_to_string(
     // a simple way to output CSV data
     format!(
         "{},{},{},${:.2},{:.2}%,${:.2},${:.2},${:.2}",
-        from.to_rfc3339(),
-        to.to_rfc3339(),
+        from.unix_timestamp(),
+        to.unix_timestamp(),
         symbol,
         last_price,
         pct_change * 100.0,
@@ -108,23 +165,48 @@ fn convert_closes_to_string(
     )
 }
 
-#[tokio::main]
-async fn main() -> () {
-    let opts = Opts::parse();
-    let from: DateTime<Utc> = opts.from.parse().expect("Couldn't parse 'from' date");
+// #[tokio::main]
+// async fn main() -> () {
+//     let opts = Opts::parse();
+//     let from: OffsetDateTime = OffsetDateTime::checked_to_offset(self, offset)// opts.from.
 
-    // a simple way to output a CSV header
-    println!("period start,period end,symbol,price,change %,min,max,30d avg");
-    let (tx, mut rx) = mpsc::channel(BUFFER_SIZE);
-    for symbol in opts.symbols.split(',') {
-        generate_yahoo_requests(tx.clone(), &from, symbol).await;
-    }
-    while let Some((symbol, closes, to)) = rx.recv().await {
-        if !closes.is_empty() {
-            println!(
-                "{}",
-                convert_closes_to_string(from, to, symbol.as_str(), closes)
-            );
+//     // a simple way to output a CSV header
+//     println!("period start,period end,symbol,price,change %,min,max,30d avg");
+//     let (tx, mut rx) = mpsc::channel(BUFFER_SIZE);
+//     for symbol in opts.symbols.split(',') {
+//         generate_yahoo_requests(tx.clone(), &from, symbol).await;
+//     }
+//     while let Some((symbol, closes, to)) = rx.recv().await {
+//         if !closes.is_empty() {
+//             println!(
+//                 "{}",
+//                 convert_closes_to_string(from, to, symbol.as_str(), closes)
+//             );
+//         }
+//     }
+// }
+
+#[tokio::main]
+async fn main() {
+    let opts = Opts::parse();
+    
+    let from: OffsetDateTime = match time::PrimitiveDateTime::parse(&opts.from, "%F %T") {
+        Ok(date) => date,
+        Err(_) => {
+            OffsetDateTime::now_utc()
         }
-    }
+    };
+    
+    println!("period start,period end,symbol,price,change %,min,max,30d avg");
+
+    let data_processor = DataProcessor.start();
+
+    let symbols: Vec<&str> = opts.symbols.split(',').collect();
+    let data_fetcher = DataFetcher {  data_processor}.start();
+    symbols.into_iter().for_each(|symbol| {
+        let symbol = symbol.to_string();
+        tokio::spawn(async move{
+            data_fetcher.send(FetchData { symbol: symbol.to_owned() }).await.unwrap();
+        });
+    });
 }
