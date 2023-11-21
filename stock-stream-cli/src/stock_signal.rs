@@ -62,7 +62,7 @@ impl AsyncStockSignal for WindowedSMA {
 }
 
 impl WindowedSMA {
-    pub fn new( window_size: usize) -> Self {
+    pub fn new(window_size: usize) -> Self {
         Self { window_size }
     }
 }

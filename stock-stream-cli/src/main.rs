@@ -1,17 +1,13 @@
-use chrono::prelude::*;
 use actix::prelude::*;
-use async_trait::async_trait;
+use chrono::prelude::*;
 use clap::Parser;
-use std::{io::{Error, ErrorKind}, time};
-use tokio::{
-    self,
-    sync::mpsc,
-    time::{interval, Duration}, runtime::Handle,
-};
+use std::io::{Error, ErrorKind};
+use tokio::{self};
 use yahoo::time::OffsetDateTime;
 use yahoo_finance_api as yahoo;
 mod stock_signal;
 use crate::stock_signal::{AsyncStockSignal, MaxPrice, MinPrice, PriceDifference, WindowedSMA};
+use actix_rt;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -25,8 +21,8 @@ struct Opts {
     #[clap(short, long)]
     from: String,
 }
-struct DataFetcher{
-    data_processor: Addr<DataProcessor>
+struct DataFetcher {
+    data_processor: Addr<DataProcessor>,
 }
 
 impl Actor for DataFetcher {
@@ -40,27 +36,38 @@ struct FetchData {
 }
 
 impl Message for FetchData {
-    type Result =  Result<(), Box<dyn std::error::Error + 'static + Send>>;
+    type Result = Result<(), Box<dyn std::error::Error + 'static + Send>>;
 }
 
-#[async_trait]
+//#[async_trait]
 impl Handler<FetchData> for DataFetcher {
-    type Result = Result<(), Box<dyn std::error::Error + 'static + Send>>;
+    type Result = ResponseFuture<Result<(), Box<dyn std::error::Error + 'static + Send>>>;
 
-    async fn handle(&mut self, ms
-    g: FetchData, _ctx: &mut Context<Self>) -> Self::Result {
+    fn handle(&mut self, msg: FetchData, _ctx: &mut Context<Self>) -> Self::Result {
         let symbol = msg.symbol.clone();
         let from = msg.from.clone();
         let to = msg.to.clone();
-        tokio::spawn(async move {
-            let closes = fetch_closing_data(&symbol,from, to.clone()).await.unwrap_or_else(|_| vec![]);
-            let _ = self.data_processor.send(Convert { symbol, closes,to, from }).await;
-        });
-        Ok(())
+        let data_processor_addr = self.data_processor.clone();
+        Box::pin(async move {
+            let result = fetch_closing_data(&symbol, from, to).await;
+            match result {
+                Ok(closes) => {
+                    let _ = data_processor_addr
+                        .send(Convert {
+                            symbol,
+                            closes,
+                            to,
+                            from,
+                        })
+                        .await;
+                    Ok(())
+                }
+                Err(e) => Err(Box::new(e) as Box<dyn std::error::Error + 'static + Send>),
+            }
+        })
     }
 }
-
-struct  DataProcessor;
+struct DataProcessor;
 
 impl Actor for DataProcessor {
     type Context = Context<Self>;
@@ -83,8 +90,8 @@ impl Handler<Convert> for DataProcessor {
         convert_closes_to_string(msg.from, msg.to, msg.symbol.as_str(), msg.closes)
     }
 }
-const BUFFER_SIZE: usize = 100;
-const REFRESH_INTERVAL: u64 = 30;
+// const BUFFER_SIZE: usize = 100;
+// const REFRESH_INTERVAL: u64 = 30;
 const WINDOW_SIZE: usize = 30;
 ///
 /// Retrieve data from a data source and extract the closing prices. Errors during download are mapped onto io::Errors as InvalidData.
@@ -96,11 +103,7 @@ async fn fetch_closing_data(
 ) -> std::io::Result<Vec<f64>> {
     let provider = yahoo::YahooConnector::new();
     let response = provider
-        .get_quote_history(
-            symbol,
-            beginning,
-            end,
-        )
+        .get_quote_history(symbol, beginning, end)
         .await
         .map_err(|_| Error::from(ErrorKind::InvalidData))?;
     let mut quotes = response
@@ -113,8 +116,6 @@ async fn fetch_closing_data(
         Ok(vec![])
     }
 }
-
-
 
 // async fn generate_yahoo_requests(
 //     from: &DateTime<Utc>,
@@ -186,27 +187,42 @@ fn convert_closes_to_string(
 //     }
 // }
 
-#[tokio::main]
+#[actix::main]
 async fn main() {
     let opts = Opts::parse();
-    
-    let from: OffsetDateTime = match time::PrimitiveDateTime::parse(&opts.from, "%F %T") {
-        Ok(date) => date,
+    let from: DateTime<Utc> = match opts.from.parse() {
+        Ok(from) => from,
         Err(_) => {
-            OffsetDateTime::now_utc()
+            eprint!("Could not parse 'from'");
+            Utc::now()
         }
     };
-    
+    let to: DateTime<Utc> = Utc::now();
     println!("period start,period end,symbol,price,change %,min,max,30d avg");
 
     let data_processor = DataProcessor.start();
 
     let symbols: Vec<&str> = opts.symbols.split(',').collect();
-    let data_fetcher = DataFetcher {  data_processor}.start();
+    let data_fetcher = DataFetcher { data_processor }.start();
     symbols.into_iter().for_each(|symbol| {
         let symbol = symbol.to_string();
-        tokio::spawn(async move{
-            data_fetcher.send(FetchData { symbol: symbol.to_owned() }).await.unwrap();
+        let data_fetcher = data_fetcher.clone();
+        actix_rt::spawn(async move {
+            let result = data_fetcher
+                .send(FetchData {
+                    symbol: symbol.to_owned(),
+                    from: OffsetDateTime::from_unix_timestamp(from.timestamp()).unwrap(),
+                    to: OffsetDateTime::from_unix_timestamp(to.timestamp()).unwrap(),
+                })
+                .await;
+            match result {
+                Ok(_) => {
+                    println!("Success")
+                }
+                Err(e) => {
+                    eprintln!("{:?}", e)
+                }
+            }
         });
     });
 }
