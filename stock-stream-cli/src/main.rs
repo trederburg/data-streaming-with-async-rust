@@ -1,8 +1,7 @@
 use actix::prelude::*;
 use chrono::prelude::*;
 use clap::Parser;
-use std::io::{Error, ErrorKind};
-use tokio::{self};
+use std::{io::{Error, ErrorKind, Write}, fs::OpenOptions};
 use yahoo::time::OffsetDateTime;
 use yahoo_finance_api as yahoo;
 mod stock_signal;
@@ -39,7 +38,6 @@ impl Message for FetchData {
     type Result = Result<(), Box<dyn std::error::Error + 'static + Send>>;
 }
 
-//#[async_trait]
 impl Handler<FetchData> for DataFetcher {
     type Result = ResponseFuture<Result<(), Box<dyn std::error::Error + 'static + Send>>>;
 
@@ -67,7 +65,9 @@ impl Handler<FetchData> for DataFetcher {
         })
     }
 }
-struct DataProcessor;
+struct DataProcessor{
+    data_saver: Addr<DataSaver>,
+}
 
 impl Actor for DataProcessor {
     type Context = Context<Self>;
@@ -80,15 +80,56 @@ struct Convert {
 }
 
 impl Message for Convert {
-    type Result = String;
+    type Result = Result<(), MailboxError>;
 }
 
 impl Handler<Convert> for DataProcessor {
-    type Result = String;
+    type Result = Result<(), MailboxError>;
 
     fn handle(&mut self, msg: Convert, _ctx: &mut Context<Self>) -> Self::Result {
-        convert_closes_to_string(msg.from, msg.to, msg.symbol.as_str(), msg.closes)
+        let from = msg.from.clone();
+        let to = msg.to.clone();
+        let symbol = msg.symbol.to_string();
+        let data_saver = self.data_saver.clone();
+
+            let summary = convert_closes_to_string(msg.from, msg.to, msg.symbol.as_str(), msg.closes);
+            let result = data_saver.send(SymbolSummary{summary});
+            Ok(())
+            // match result {
+            //     Ok(_) => {Ok(())}
+            //     Err(e) => {Err(e)}
+            // }
+
     }
+}
+
+struct DataSaver;
+
+impl Actor for DataSaver {
+    type Context = Context<Self>;
+}
+
+struct SymbolSummary{
+    summary: String,
+}
+
+impl Message for SymbolSummary {
+    type Result = Result<(),MailboxError>;
+}
+impl  Handler<SymbolSummary> for DataSaver {
+    type Result = Result<(), MailboxError>;
+
+    fn handle(&mut self, msg: SymbolSummary, ctx: &mut Self::Context) -> Self::Result {
+        let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("o.txt")?;
+        file.write_all(msg.summary.as_bytes())?;
+        println!("{}",msg.summary);
+        Ok(())
+    }
+    
 }
 // const BUFFER_SIZE: usize = 100;
 // const REFRESH_INTERVAL: u64 = 30;
@@ -199,8 +240,8 @@ async fn main() {
     };
     let to: DateTime<Utc> = Utc::now();
     println!("period start,period end,symbol,price,change %,min,max,30d avg");
-
-    let data_processor = DataProcessor.start();
+    let data_saver = DataSaver.start();
+    let data_processor = DataProcessor{data_saver}.start();
 
     let symbols: Vec<&str> = opts.symbols.split(',').collect();
     let data_fetcher = DataFetcher { data_processor }.start();
